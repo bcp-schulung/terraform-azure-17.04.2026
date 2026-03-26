@@ -17,7 +17,8 @@ resource "azurerm_subnet" "subnet" {
 }
 
 resource "azurerm_public_ip" "pip" {
-  name                = "${var.prefix}-${var.vm_name}-pip"
+  count              = 2
+  name                = "${var.prefix}-${var.vm_name}-pip-${count.index}"
   location            = data.azurerm_resource_group.rg.location
   resource_group_name = data.azurerm_resource_group.rg.name
   allocation_method   = "Static"
@@ -43,6 +44,7 @@ resource "azurerm_network_security_group" "nsg" {
 }
 
 resource "azurerm_network_interface" "nic" {
+  count               = 2
   name                = "${var.prefix}-${var.vm_name}-nic"
   location            = data.azurerm_resource_group.rg.location
   resource_group_name = data.azurerm_resource_group.rg.name
@@ -51,23 +53,25 @@ resource "azurerm_network_interface" "nic" {
     name                          = "internal"
     subnet_id                     = azurerm_subnet.subnet.id
     private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.pip.id
+    public_ip_address_id          = azurerm_public_ip.pip[count.index].id
   }
 }
 
 resource "azurerm_network_interface_security_group_association" "nic_nsg" {
-  network_interface_id      = azurerm_network_interface.nic.id
+  count                    = 2
+  network_interface_id      = azurerm_network_interface.nic[count.index].id
   network_security_group_id = azurerm_network_security_group.nsg.id
 }
 
 resource "azurerm_linux_virtual_machine" "vm" {
-  name                = "${var.prefix}-${var.vm_name}"
+  count = 2
+  name                = "${var.prefix}-${var.vm_name}-${count.index}"
   resource_group_name = data.azurerm_resource_group.rg.name
   location            = data.azurerm_resource_group.rg.location
   size                = var.vm_size
   admin_username      = var.admin_username
   network_interface_ids = [
-    azurerm_network_interface.nic.id
+    azurerm_network_interface.nic[count.index].id
   ]
 
   disable_password_authentication = true
