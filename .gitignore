@@ -1,5 +1,19 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+*.tfvars
+*.tfvars.json
+
+# Credentials / secrets
 vm_passwords.csv
-setup/student-goyal-megha-creds.json
-setup/student-michaelis-nico-creds.json
-setup/student-punke-tobias-creds.json
-setup/student-uhegbu-chidiebere-creds.json
+setup/student-*-creds.json
