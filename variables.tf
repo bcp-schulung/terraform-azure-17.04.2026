@@ -1,3 +1,8 @@
+variable "prefix" {
+  description = "Student prefix for resource"
+  type = string
+}
+
 variable "resource_group_name" {
   description = "Resource group name"
   type        = string
