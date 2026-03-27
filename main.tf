@@ -45,7 +45,7 @@ resource "azurerm_network_security_group" "nsg" {
 
 resource "azurerm_network_interface" "nic" {
   count               = 2
-  name                = "${var.prefix}-${var.vm_name}-nic"
+  name                = "${var.prefix}-${var.vm_name}-${count.index}-nic"
   location            = data.azurerm_resource_group.rg.location
   resource_group_name = data.azurerm_resource_group.rg.name
 
