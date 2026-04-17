@@ -3,14 +3,18 @@ variable "prefix" {
   type = string
 }
 
-variable "resource_group_name" {
-  description = "Resource group name"
-  type        = string
-  default     = "rg-tf-lab"
-}
-
 variable "vm_name" {
   description = "Virtual machine name"
   type        = string
   default     = "demo-vm"
+}
+
+variable "rg_location" {
+  description = "Resource group location"
+  type = string
+}
+
+variable "rg_name" {
+  description = "Resource group name"
+  type = string
 }
