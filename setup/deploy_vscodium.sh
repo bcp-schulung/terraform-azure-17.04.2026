@@ -5,12 +5,17 @@ set -euo pipefail
 # Installs code-server (browser IDE), creates a dedicated user,
 # and configures password auth per VM.
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 SSH_USER="root"
 SSH_KEY_PATH="${HOME}/.ssh/id_rsa"
-VMS_FILE="vms.txt"
-PASSWORDS_FILE="vm_passwords.csv"
+VMS_FILE="${SCRIPT_DIR}/vms.txt"
+PASSWORDS_FILE="${SCRIPT_DIR}/vm_passwords.csv"
 IDE_USER="devuser"
 IDE_PORT="8080"
+REPO_URL="git@github.com:bcp-schulung/terraform-azure-17.04.2026.git"
+REPO_AUTH_MODE="public"
+TF_VERSION="latest"
 DRY_RUN="false"
 PARALLEL="false"
 PARALLEL_JOBS="3"
@@ -21,11 +26,14 @@ usage() {
 Usage: $0 [options]
 
 Options:
-  --dry-run         Print what would be done, without making changes
-  --parallel        Deploy to multiple VMs in parallel
-  --jobs N          Number of parallel jobs (default: 3, used with --parallel)
-  --verify          Verify service health after deployment
-  -h, --help        Show this help
+  --dry-run                 Print what would be done, without making changes
+  --parallel                Deploy to multiple VMs in parallel
+  --jobs N                  Number of parallel jobs (default: 3, used with --parallel)
+  --verify                  Verify service health after deployment
+  --repo-url URL            Git repository to clone into the devuser home directory
+  --repo-auth MODE          Clone mode: public, ssh, or https (default: public)
+  --terraform-version VER   Terraform version to install, or 'latest' (default: latest)
+  -h, --help                Show this help
 EOF
 }
 
@@ -51,6 +59,30 @@ while [[ $# -gt 0 ]]; do
       PARALLEL_JOBS="$2"
       shift 2
       ;;
+    --repo-url)
+      if [[ $# -lt 2 ]]; then
+        echo "[ERROR] --repo-url requires a value"
+        exit 1
+      fi
+      REPO_URL="$2"
+      shift 2
+      ;;
+    --repo-auth)
+      if [[ $# -lt 2 ]]; then
+        echo "[ERROR] --repo-auth requires a value"
+        exit 1
+      fi
+      REPO_AUTH_MODE="$(echo "$2" | tr '[:upper:]' '[:lower:]')"
+      shift 2
+      ;;
+    --terraform-version)
+      if [[ $# -lt 2 ]]; then
+        echo "[ERROR] --terraform-version requires a value"
+        exit 1
+      fi
+      TF_VERSION="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -65,6 +97,11 @@ done
 
 if ! [[ "$PARALLEL_JOBS" =~ ^[0-9]+$ ]] || [[ "$PARALLEL_JOBS" -lt 1 ]]; then
   echo "[ERROR] --jobs must be a positive integer"
+  exit 1
+fi
+
+if [[ ! "$REPO_AUTH_MODE" =~ ^(public|ssh|https)$ ]]; then
+  echo "[ERROR] --repo-auth must be one of: public, ssh, https"
   exit 1
 fi
 
@@ -113,12 +150,22 @@ get_password_for_ip() {
 deploy_one_vm() {
   local ip="$1"
   local vm_password="$2"
+  local repo_name=""
+
+  if [[ -n "$REPO_URL" ]]; then
+    repo_name="$(basename "${REPO_URL%.git}")"
+  fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "[DRY-RUN] $ip"
     echo "  - SSH as $SSH_USER using key $SSH_KEY_PATH"
     echo "  - Create/update user: $IDE_USER"
     echo "  - Install code-server if missing"
+    echo "  - Install Terraform ($TF_VERSION)"
+    echo "  - Install Azure CLI"
+    if [[ -n "$repo_name" ]]; then
+      echo "  - Clone/update repo into /home/$IDE_USER/$repo_name"
+    fi
     echo "  - Configure password auth on port $IDE_PORT"
     echo "  - Enable service: code-server@$IDE_USER"
     echo "  - Open firewall ports: $IDE_PORT/tcp (if ufw exists)"
@@ -132,7 +179,7 @@ deploy_one_vm() {
     -o ConnectTimeout=15 \
     -o StrictHostKeyChecking=accept-new \
     "$SSH_USER@$ip" \
-    "IDE_USER='$IDE_USER' IDE_PORT='$IDE_PORT' IDE_PASS='$vm_password' bash -s" <<'REMOTE_SCRIPT'
+    "IDE_USER='$IDE_USER' IDE_PORT='$IDE_PORT' IDE_PASS='$vm_password' TF_VERSION='$TF_VERSION' REPO_URL='$REPO_URL' REPO_AUTH_MODE='$REPO_AUTH_MODE' bash -s" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
 if ! command -v apt-get >/dev/null 2>&1; then
@@ -142,7 +189,96 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y curl sudo git ca-certificates gnupg
+apt-get install -y curl sudo git ca-certificates gnupg lsb-release unzip
+install -d -m 0755 /etc/apt/keyrings
+
+install_terraform() {
+  if command -v terraform >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local arch
+  case "$(dpkg --print-architecture)" in
+    amd64) arch="amd64" ;;
+    arm64) arch="arm64" ;;
+    *)
+      echo "[ERROR] Unsupported architecture for Terraform."
+      exit 1
+      ;;
+  esac
+
+  if [[ "${TF_VERSION:-latest}" == "latest" ]]; then
+    curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /etc/apt/keyrings/hashicorp-archive-keyring.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(. /etc/os-release && echo "$VERSION_CODENAME") main" > /etc/apt/sources.list.d/hashicorp.list
+    apt-get update -y
+    apt-get install -y terraform
+  else
+    local tmp_dir zip_path
+    tmp_dir="$(mktemp -d)"
+    zip_path="$tmp_dir/terraform.zip"
+    curl -fsSL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${arch}.zip" -o "$zip_path"
+    unzip -oq "$zip_path" -d /usr/local/bin
+    chmod 755 /usr/local/bin/terraform
+    rm -rf "$tmp_dir"
+  fi
+}
+
+install_azure_cli() {
+  if command -v az >/dev/null 2>&1; then
+    return 0
+  fi
+
+  curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
+  chmod go+r /etc/apt/keyrings/microsoft.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/azure-cli.list
+  apt-get update -y
+  apt-get install -y azure-cli
+}
+
+normalize_repo_url() {
+  local url="$1"
+  local mode="${2:-public}"
+
+  case "$mode" in
+    public|https)
+      if [[ "$url" =~ ^git@github\.com:(.+)$ ]]; then
+        printf 'https://github.com/%s\n' "${BASH_REMATCH[1]}"
+      else
+        printf '%s\n' "$url"
+      fi
+      ;;
+    ssh)
+      printf '%s\n' "$url"
+      ;;
+    *)
+      printf '%s\n' "$url"
+      ;;
+  esac
+}
+
+clone_repo_for_user() {
+  if [[ -z "${REPO_URL:-}" ]]; then
+    return 0
+  fi
+
+  local clone_url repo_name repo_dir
+  clone_url="$(normalize_repo_url "$REPO_URL" "${REPO_AUTH_MODE:-public}")"
+  repo_name="$(basename "$clone_url")"
+  repo_name="${repo_name%.git}"
+  repo_dir="/home/$IDE_USER/$repo_name"
+
+  if [[ -d "$repo_dir/.git" ]]; then
+    sudo -u "$IDE_USER" -H git -C "$repo_dir" pull --ff-only
+  else
+    rm -rf "$repo_dir"
+    sudo -u "$IDE_USER" -H git clone "$clone_url" "$repo_dir"
+  fi
+
+  chown -R "$IDE_USER:$IDE_USER" "$repo_dir"
+}
+
+install_terraform
+install_azure_cli
 
 # ── code-server ──────────────────────────────────────────────────────────────
 if ! command -v code-server >/dev/null 2>&1; then
@@ -159,6 +295,8 @@ echo "$IDE_USER ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$IDE_USER"
 chmod 440 "/etc/sudoers.d/$IDE_USER"
 
 echo "$IDE_USER:$IDE_PASS" | chpasswd
+
+clone_repo_for_user
 
 # ── code-server config ───────────────────────────────────────────────────────
 install -d -m 700 -o "$IDE_USER" -g "$IDE_USER" "/home/$IDE_USER/.config/code-server"
@@ -177,7 +315,7 @@ if command -v ufw >/dev/null 2>&1; then
   ufw allow "$IDE_PORT/tcp" || true
 fi
 
-echo "[OK] code-server deployed"
+echo "[OK] code-server, Terraform, Azure CLI, and project setup complete"
 echo "[OK] Ready on http://$(hostname -I | awk '{print $1}'):$IDE_PORT"
 REMOTE_SCRIPT
   then
@@ -185,7 +323,11 @@ REMOTE_SCRIPT
     return 1
   fi
 
-  echo "[DONE] $ip -> http://$ip:$IDE_PORT (user: $IDE_USER)"
+  if [[ -n "$repo_name" ]]; then
+    echo "[DONE] $ip -> http://$ip:$IDE_PORT (user: $IDE_USER, repo: $repo_name)"
+  else
+    echo "[DONE] $ip -> http://$ip:$IDE_PORT (user: $IDE_USER)"
+  fi
 }
 
 process_ip() {
