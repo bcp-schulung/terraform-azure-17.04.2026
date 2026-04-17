@@ -17,3 +17,4 @@ terraform.rc
 # Credentials / secrets
 vm_passwords.csv
 setup/student-*-creds.json
+.DS_Store
