@@ -1,6 +1,6 @@
 variable "prefix" {
   description = "Student prefix for resource"
-  type = string
+  type        = string
 }
 
 variable "vm_name" {
@@ -11,10 +11,10 @@ variable "vm_name" {
 
 variable "rg_location" {
   description = "Resource group location"
-  type = string
+  type        = string
 }
 
 variable "rg_name" {
   description = "Resource group name"
-  type = string
+  type        = string
 }

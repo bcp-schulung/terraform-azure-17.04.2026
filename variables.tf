@@ -1,6 +1,6 @@
 variable "prefix" {
   description = "Student prefix for resource"
-  type = string
+  type        = string
 }
 
 variable "resource_group_name" {
